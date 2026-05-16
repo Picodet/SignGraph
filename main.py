@@ -21,6 +21,7 @@ import utils
 from seq_scripts import seq_train, seq_eval
 from torch.cuda.amp import autocast as autocast
 from utils.misc import *
+import swanlab
 class Processor():
     def __init__(self, arg):
         self.arg = arg
@@ -36,6 +37,7 @@ class Processor():
             init_distributed_mode(self.arg)
         self.recoder = utils.Recorder(self.arg.work_dir, self.arg.print_log, self.arg.log_interval)
         self.save_arg()
+        self.swanlab_run = make_swanlab(self.arg.work_dir, vars(self.arg))
         if self.arg.random_fix:
             self.rng = utils.RandomState(seed=self.arg.random_seed)
         self.device = utils.GpuDataParallel()
@@ -66,7 +68,7 @@ class Processor():
                 eval_model = epoch % self.arg.eval_interval == 0
                 epoch_time = time.time()
                 seq_train(self.data_loader['train'], self.model, self.optimizer,
-                          self.device, epoch, self.recoder)
+                          self.device, epoch, self.recoder, self.swanlab_run)
                 dev_wer={}
                 dev_wer['wer']=0
                 if is_main_process():
@@ -90,6 +92,15 @@ class Processor():
                                            'Best_test: {:05.2f}, {:05.2f}, {:05.2f},'
                                            'Epoch : {}'.format(best_dev["wer"], best_dev["del"], best_dev["ins"],
                                                                best_tes["wer"],best_tes["del"],best_tes["ins"], best_epoch))
+                    if self.swanlab_run is not None:
+                        self.swanlab_run.log({
+                            "dev/wer": dev_wer['wer'],
+                            "dev/del": dev_wer['del'],
+                            "dev/ins": dev_wer['ins'],
+                            "test/wer": test_wer['wer'],
+                            "test/del": test_wer['del'],
+                            "test/ins": test_wer['ins'],
+                        }, step=epoch)
                     if save_model:
                         model_path = "{}dev_{:05.2f}_epoch{}_model.pt".format(self.arg.work_dir, dev_wer['wer'], epoch)
                         seq_model_list.append(model_path)
@@ -99,7 +110,9 @@ class Processor():
                     total_time += epoch_time
                     torch.cuda.empty_cache()
                     self.recoder.print_log('Epoch {} costs {} mins {} seconds'.format(epoch, int(epoch_time)//60, int(epoch_time)%60))
-                self.recoder.print_log('Training costs {} hours {} mins {} seconds'.format(int(total_time)//60//60, int(total_time)//60%60, int(total_time)%60))
+        self.recoder.print_log('Training costs {} hours {} mins {} seconds'.format(int(total_time)//60//60, int(total_time)//60%60, int(total_time)%60))
+        if self.swanlab_run is not None:
+            swanlab.finish()
         elif self.arg.phase == 'test' and is_main_process():
             if self.arg.load_weights is None and self.arg.load_checkpoints is None:
                 print('Please appoint --weights.')

@@ -14,10 +14,11 @@ from einops import rearrange
 from collections import defaultdict
 from utils.metrics import wer_list 
 from utils.misc import *
+import swanlab
 
 
 
-def seq_train(loader, model, optimizer, device, epoch_idx, recoder):
+def seq_train(loader, model, optimizer, device, epoch_idx, recoder, swanlab_run=None):
     model.train()
     optimizer.scheduler.step(epoch_idx)
     loss_value = []
@@ -53,6 +54,9 @@ def seq_train(loader, model, optimizer, device, epoch_idx, recoder):
             recoder.print_log(
                 '\tEpoch: {}, Batch({}/{}) done. Loss: {:.8f}  lr:{:.6f}'
                     .format(epoch_idx, batch_idx, len(loader), loss.item(), clr[0]))
+            if swanlab_run is not None:
+                global_step = epoch_idx * len(loader) + batch_idx
+                swanlab_run.log({"train/loss": loss.item(), "train/lr": clr[0]}, step=global_step)
         del ret_dict
         del loss
     optimizer.scheduler.step()
