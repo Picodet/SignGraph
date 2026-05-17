@@ -67,9 +67,13 @@ class BasicBlock(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, block, layers, num_classes=1000):
+    def __init__(self, block, layers, num_classes=1000,
+                 use_lsg=True, use_tsg=True):
         self.inplanes = 64
+        self.use_lsg = use_lsg
+        self.use_tsg = use_tsg
         super(ResNet, self).__init__()
+
         self.conv1 = nn.Conv3d(3, 64, kernel_size=(1, 7, 7), stride=(1, 2, 2), padding=(0, 3, 3),
                                bias=False)
         self.bn1 = nn.BatchNorm3d(64)
@@ -127,16 +131,20 @@ class ResNet(nn.Module):
         #
         N, C, T, H, W = x.size()
         x = rearrange(x, 'N C T H W -> (N T) C H W')  # [78, 256, 14, 14])
-        x = x + self.localG(x) * self.alpha[0]
-        x = x + self.temporalG(x, N) * self.alpha[1]
+        if self.use_lsg:
+            x = x + self.localG(x) * self.alpha[0]
+        if self.use_tsg:
+            x = x + self.temporalG(x, N) * self.alpha[1]
         x = x.view(N, T, C, H, W).permute(0, 2, 1, 3, 4)
         # #
         x = self.layer4(x)  # [1, 512, 100, 7, 7])
         # #
         N, C, T, H, W = x.size()
         x = rearrange(x, 'N C T H W -> (N T) C H W')  # [78, 256, 14, 14])
-        x = x + self.localG2(x) * self.alpha[2]
-        x = x + self.temporalG2(x, N) * self.alpha[3]
+        if self.use_lsg:
+            x = x + self.localG2(x) * self.alpha[2]
+        if self.use_tsg:
+            x = x + self.temporalG2(x, N) * self.alpha[3]
         x = x.view(N, T, C, H, W).permute(0, 2, 1, 3, 4)
         #
 
