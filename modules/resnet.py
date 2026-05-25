@@ -18,6 +18,58 @@ model_urls = {
     'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
 }
 
+
+class CorrBlock(nn.Module):
+    """Correlation module migrated from CorrNet.
+    Computes adjacent-frame patch-level correlation to capture body trajectories.
+    Original class name: Get_Correlation; renamed to avoid namespace confusion.
+    F.sigmoid replaced with torch.sigmoid for newer PyTorch compatibility.
+    """
+    def __init__(self, channels):
+        super().__init__()
+        reduction_channel = channels // 16
+        self.down_conv = nn.Conv3d(channels, reduction_channel, kernel_size=1, bias=False)
+        self.down_conv2 = nn.Conv3d(channels, channels, kernel_size=1, bias=False)
+        self.spatial_aggregation1 = nn.Conv3d(
+            reduction_channel, reduction_channel, kernel_size=(9, 3, 3),
+            padding=(4, 1, 1), groups=reduction_channel)
+        self.spatial_aggregation2 = nn.Conv3d(
+            reduction_channel, reduction_channel, kernel_size=(9, 3, 3),
+            padding=(4, 2, 2), dilation=(1, 2, 2), groups=reduction_channel)
+        self.spatial_aggregation3 = nn.Conv3d(
+            reduction_channel, reduction_channel, kernel_size=(9, 3, 3),
+            padding=(4, 3, 3), dilation=(1, 3, 3), groups=reduction_channel)
+        self.weights = nn.Parameter(torch.ones(3) / 3, requires_grad=True)
+        self.weights2 = nn.Parameter(torch.ones(2) / 2, requires_grad=True)
+        self.conv_back = nn.Conv3d(reduction_channel, channels, kernel_size=1, bias=False)
+
+    def forward(self, x):
+        # x: [B, C, T, H, W]
+        x2 = self.down_conv2(x)
+        next_x = torch.cat([x2[:, :, 1:], x2[:, :, -1:]], dim=2)  # shift forward, repeat last frame
+        prev_x = torch.cat([x2[:, :, :1], x2[:, :, :-1]], dim=2)  # shift backward, repeat first frame
+
+        affinities_next = torch.einsum('bcthw,bctsd->bthwsd', x, next_x)
+        affinities_prev = torch.einsum('bcthw,bctsd->bthwsd', x, prev_x)
+
+        features_next = torch.einsum(
+            'bctsd,bthwsd->bcthw', next_x, torch.sigmoid(affinities_next) - 0.5)
+        features_prev = torch.einsum(
+            'bctsd,bthwsd->bcthw', prev_x, torch.sigmoid(affinities_prev) - 0.5)
+
+        features = features_next * self.weights2[0] + features_prev * self.weights2[1]
+
+        reduced_x = self.down_conv(x)
+        aggregated_x = (
+            self.spatial_aggregation1(reduced_x) * self.weights[0]
+            + self.spatial_aggregation2(reduced_x) * self.weights[1]
+            + self.spatial_aggregation3(reduced_x) * self.weights[2]
+        )
+        aggregated_x = self.conv_back(aggregated_x)
+
+        return features * (torch.sigmoid(aggregated_x) - 0.5)
+
+
 from modules.gcn_lib.torch_vertex import Grapher, act_layer
 from modules.gcn_lib.temgraph import TemporalGraph
 
@@ -78,19 +130,26 @@ class ResNet(nn.Module):
         self.layer1 = self._make_layer(block, 64, layers[0])
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        # CorrNet trajectory correlation blocks (inserted before SignGraph graph modules)
+        self.corr3 = CorrBlock(256)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
-        self.avgpool = nn.AvgPool2d(7, stride=1)
-        self.localG = Grapher(in_channels=256, kernel_size=3, dilation=1, conv='edge', #mr
+        self.corr4 = CorrBlock(512)
+        # SignGraph graph modules
+        self.localG = Grapher(in_channels=256, kernel_size=3, dilation=1, conv='edge',
                               act='relu', norm="batch", bias=True, stochastic=False,
-                              epsilon=0.0, r=1, n=14 * 14, drop_path=0.0, relative_pos=True)  # kernel_size=2
+                              epsilon=0.0, r=1, n=14 * 14, drop_path=0.0, relative_pos=True)
         self.localG2 = Grapher(in_channels=512, kernel_size=4, dilation=1, conv='edge',
                                act='relu', norm="batch", bias=True, stochastic=False,
-                               epsilon=0.0, r=1, n=7 * 7, drop_path=0.0, relative_pos=True)  # kernel_size=2
+                               epsilon=0.0, r=1, n=7 * 7, drop_path=0.0, relative_pos=True)
         self.temporalG = TemporalGraph(k=14 * 14 // 4, in_channels=256, drop_path=0)
         self.temporalG2 = TemporalGraph(k=7 * 7, in_channels=512, drop_path=0)
-        self.alpha = nn.Parameter(torch.ones(4), requires_grad=True)
+        # Separate alpha for graph and corr branches
+        # alpha_graph: initialized to ones → keeps SignGraph original branch strength
+        # alpha_corr: initialized to zeros → initial model ≈ original SignGraph, gradual learning
+        self.alpha_graph = nn.Parameter(torch.ones(4), requires_grad=True)
+        self.alpha_corr = nn.Parameter(torch.zeros(2), requires_grad=True)
+        self.avgpool = nn.AvgPool2d(7, stride=1)
         self.fc = nn.Linear(512 * block.expansion, num_classes)
- 
 
         for m in self.modules():
             if isinstance(m, nn.Conv3d) or isinstance(m, nn.Conv2d):
@@ -124,21 +183,28 @@ class ResNet(nn.Module):
         x = self.layer1(x)  # ([1, 64, 100, 56, 56])
         x = self.layer2(x)  # ize([1, 128, 100, 28, 28])
         x = self.layer3(x)  # e([1, 256, 100, 14, 14])
-        #
+
+        # CorrNet trajectory correlation (before graph reasoning)
+        x = x + self.corr3(x) * self.alpha_corr[0]
+
+        # SignGraph graph reasoning
         N, C, T, H, W = x.size()
         x = rearrange(x, 'N C T H W -> (N T) C H W')  # [78, 256, 14, 14])
-        x = x + self.localG(x) * self.alpha[0]
-        x = x + self.temporalG(x, N) * self.alpha[1]
+        x = x + self.localG(x) * self.alpha_graph[0]
+        x = x + self.temporalG(x, N) * self.alpha_graph[1]
         x = x.view(N, T, C, H, W).permute(0, 2, 1, 3, 4)
-        # #
+
         x = self.layer4(x)  # [1, 512, 100, 7, 7])
-        # #
+
+        # CorrNet trajectory correlation (before graph reasoning)
+        x = x + self.corr4(x) * self.alpha_corr[1]
+
+        # SignGraph graph reasoning
         N, C, T, H, W = x.size()
         x = rearrange(x, 'N C T H W -> (N T) C H W')  # [78, 256, 14, 14])
-        x = x + self.localG2(x) * self.alpha[2]
-        x = x + self.temporalG2(x, N) * self.alpha[3]
+        x = x + self.localG2(x) * self.alpha_graph[2]
+        x = x + self.temporalG2(x, N) * self.alpha_graph[3]
         x = x.view(N, T, C, H, W).permute(0, 2, 1, 3, 4)
-        #
 
         x = x.transpose(1, 2).contiguous()  # debug5= torch.Size([1, 100, 512, 7, 7])
         x = x.view((-1,) + x.size()[2:])  # bt,c,h,w  #ze([100, 512, 7, 7])
@@ -167,5 +233,3 @@ def resnet34(**kwargs):
     """
     model = ResNet(BasicBlock, [3, 4, 6, 3], **kwargs)
     return model
-
- 
