@@ -12,7 +12,7 @@ __all__ = [
 ]
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-f37072fd.pth',
-    'resnet34': 'https://download.pytorch.org/models/resnet34-3337ec4.pth',
+    'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
     'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
     'resnet101': 'https://download.pytorch.org/models/resnet101-5d3b4d8f.pth',
     'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
@@ -83,7 +83,7 @@ class ResNet(nn.Module):
         self.avgpool = nn.AvgPool2d(7, stride=1)
         self.corr1 = Get_Correlation(256 * block.expansion)
         self.corr2 = Get_Correlation(512 * block.expansion)
-        self.alpha_corr = nn.Parameter(torch.zeros(2), requires_grad=True)
+        self.alpha_corr = nn.Parameter(torch.ones(2) * 0.1, requires_grad=True)
         self.localG = Grapher(in_channels=256 * block.expansion, kernel_size=3, dilation=1, conv='edge', #mr
                               act='relu', norm="batch", bias=True, stochastic=False,
                               epsilon=0.0, r=1, n=14 * 14, drop_path=0.0, relative_pos=True)  # kernel_size=2
