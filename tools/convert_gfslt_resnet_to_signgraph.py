@@ -49,6 +49,22 @@ def parse_args():
         action='store_true',
         help="Save keys with 'conv2d.' prefix for loading into a full SLRModel state dict."
     )
+    parser.add_argument(
+        '--skip-bn-stats',
+        action='store_true',
+        default=True,
+        help='Skip BN running statistics (running_mean, running_var, num_batches_tracked). '
+             'Default: True. BN running stats are task-specific snapshots of data distribution '
+             'and should NOT be transferred across different tasks. Only conv weights and BN '
+             'learnable parameters (weight/bias) are preserved.'
+    )
+    parser.add_argument(
+        '--keep-bn-stats',
+        action='store_true',
+        default=False,
+        help='Keep BN running statistics (overrides --skip-bn-stats). Use only if you are '
+             'sure the source and target tasks share the same data distribution.'
+    )
     return parser.parse_args()
 
 
@@ -92,8 +108,12 @@ def should_unsqueeze_to_3d(src_key, tensor):
     return False
 
 
+BN_STATS_KEYS = ('running_mean', 'running_var', 'num_batches_tracked')
+
+
 def main():
     args = parse_args()
+    skip_bn_stats = args.skip_bn_stats and not args.keep_bn_stats
 
     checkpoint = torch.load(args.src, map_location='cpu')
     state = get_state_dict(checkpoint)
@@ -101,6 +121,7 @@ def main():
     converted = OrderedDict()
     seen_stage_count = {stage: 0 for stage in VALID_STAGES}
     skipped = []
+    bn_stats_skipped = []
 
     for key, value in state.items():
         src_key = strip_gfslt_resnet_prefix(key)
@@ -112,6 +133,11 @@ def main():
 
         if not stage_allowed(src_key, args.stages):
             skipped.append(src_key)
+            continue
+
+        # Skip BN running statistics when cross-task transfer
+        if skip_bn_stats and any(s in src_key for s in BN_STATS_KEYS):
+            bn_stats_skipped.append(src_key)
             continue
 
         if should_unsqueeze_to_3d(src_key, value):
@@ -146,6 +172,8 @@ def main():
             'full_model_prefix': args.full_model_prefix,
             'converted_tensors': len(converted),
             'stage_tensor_count': seen_stage_count,
+            'skip_bn_stats': skip_bn_stats,
+            'bn_stats_skipped_count': len(bn_stats_skipped),
             'note': 'GFSLT-VLP 2D ResNet weights converted to SignGraph Conv3d weights by unsqueezing temporal dim.',
         }
     }
@@ -156,6 +184,13 @@ def main():
     print(f'[OK] stages: {args.stages}')
     print(f'[OK] full_model_prefix: {args.full_model_prefix}')
     print(f'[OK] stage tensor count: {seen_stage_count}')
+    print(f'[OK] skip_bn_stats: {skip_bn_stats}')
+    if bn_stats_skipped:
+        print(f'[OK] BN running stats skipped: {len(bn_stats_skipped)} tensors')
+        for k in bn_stats_skipped[:10]:
+            print(f'      - {k}')
+        if len(bn_stats_skipped) > 10:
+            print(f'      ... and {len(bn_stats_skipped) - 10} more')
     if skipped:
         print(f'[OK] skipped tensors by stage filter: {len(skipped)}')
 
