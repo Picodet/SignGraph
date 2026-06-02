@@ -160,6 +160,15 @@ class Processor():
             loss_weights=self.arg.loss_weights,
         )
         shutil.copy2(inspect.getfile(model_class), self.arg.work_dir)
+
+        if self.arg.gfslt_resnet_path and not self.arg.load_weights and not self.arg.load_checkpoints:
+            model.load_gfslt_resnet_pretrain(
+                self.arg.gfslt_resnet_path,
+                strict=self.arg.gfslt_resnet_strict,
+            )
+            if len(self.arg.gfslt_freeze_stages):
+                model.freeze_gfslt_resnet_stages(self.arg.gfslt_freeze_stages)
+
         optimizer = utils.Optimizer(model, self.arg.optimizer_args)
 
         if self.arg.load_weights:
@@ -309,4 +318,3 @@ if __name__ == '__main__':
     processor = Processor(args)
     utils.pack_code("./", args.work_dir)
     processor.start()
- 
