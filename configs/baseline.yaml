@@ -21,6 +21,13 @@ loss_weights:
   Dist: 25.0
 load_weights:  False
 load_checkpoints:  False
+
+# Optional GFSLT-VLP Stage1 ResNet initialization.
+# First convert the GFSLT checkpoint with tools/convert_gfslt_resnet_to_signgraph.py.
+gfslt_resnet_path: ''
+gfslt_resnet_strict: False
+gfslt_freeze_stages: []
+
 optimizer_args:
   optimizer: Adam
   learning_rate:
