@@ -111,6 +111,21 @@ def get_parser():
         default=[],
         nargs='+',
         help='the name of weights which will be ignored in the initialization')
+    parser.add_argument(
+        '--gfslt-resnet-path',
+        default='',
+        help='path to converted GFSLT-VLP Stage1 ResNet weights for SignGraph conv2d initialization')
+    parser.add_argument(
+        '--gfslt-resnet-strict',
+        type=str2bool,
+        default=False,
+        help='strictly load converted GFSLT ResNet weights into SignGraph conv2d')
+    parser.add_argument(
+        '--gfslt-freeze-stages',
+        type=str,
+        default=[],
+        nargs='*',
+        help='optional conv2d stages to freeze after GFSLT ResNet loading: stem layer1 layer2 layer3 layer4')
 
     # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
     # optim
@@ -157,11 +172,12 @@ def get_parser():
 
 
 
-
     return parser
 
 
 def str2bool(v):
+    if isinstance(v, bool):
+        return v
     if v.lower() in ('yes', 'true', 't', 'y', '1'):
         return True
     elif v.lower() in ('no', 'false', 'f', 'n', '0'):
