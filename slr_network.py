@@ -1,5 +1,7 @@
 import pdb
 import copy
+from collections import OrderedDict
+
 import utils
 import torch
 import types
@@ -61,6 +63,85 @@ class SLRModel(nn.Module):
             self.conv1d.fc = nn.Linear(hidden_size, self.num_classes)
         if share_classifier:
             self.conv1d.fc = self.classifier
+
+    def load_gfslt_resnet_pretrain(self, weight_path, strict=False):
+        """Load converted GFSLT-VLP Stage1 ResNet weights into SignGraph conv2d.
+
+        Expected checkpoint formats:
+        1. {'state_dict': {'conv1.weight': ..., 'layer1.0.conv1.weight': ...}}
+        2. {'state_dict': {'conv2d.conv1.weight': ..., 'conv2d.layer1.0.conv1.weight': ...}}
+        3. A raw state dict in either of the above key formats.
+
+        This function intentionally touches only self.conv2d. It does not load
+        GFSLT TemporalConv, MBart, text encoder, visual trans_encoder, or any
+        SignGraph classifier / graph module weights.
+        """
+        checkpoint = torch.load(weight_path, map_location='cpu')
+        if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        elif isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            state_dict = checkpoint['model_state_dict']
+        elif isinstance(checkpoint, dict) and 'model' in checkpoint:
+            state_dict = checkpoint['model']
+        else:
+            state_dict = checkpoint
+
+        conv2d_ref = self.conv2d.state_dict()
+        conv2d_state = OrderedDict()
+        incompatible = []
+
+        for key, value in state_dict.items():
+            clean_key = key.replace('module.', '')
+            if clean_key.startswith('conv2d.'):
+                clean_key = clean_key[len('conv2d.'):]
+
+            if clean_key not in conv2d_ref:
+                continue
+
+            if conv2d_ref[clean_key].shape != value.shape:
+                incompatible.append((clean_key, tuple(value.shape), tuple(conv2d_ref[clean_key].shape)))
+                continue
+
+            conv2d_state[clean_key] = value
+
+        ret = self.conv2d.load_state_dict(conv2d_state, strict=strict)
+
+        print(f"[GFSLT-ResNet] Loaded {len(conv2d_state)} tensors into SignGraph conv2d from: {weight_path}")
+        if incompatible:
+            print('[GFSLT-ResNet] Skipped incompatible tensors:')
+            for name, src_shape, dst_shape in incompatible[:20]:
+                print(f"  {name}: checkpoint {src_shape} vs model {dst_shape}")
+            if len(incompatible) > 20:
+                print(f"  ... and {len(incompatible) - 20} more")
+        print('[GFSLT-ResNet] Missing keys:', ret.missing_keys)
+        print('[GFSLT-ResNet] Unexpected keys:', ret.unexpected_keys)
+        return ret
+
+    def freeze_gfslt_resnet_stages(self, stages):
+        """Freeze selected SignGraph conv2d stages after loading GFSLT ResNet weights."""
+        if stages is None:
+            return
+
+        stage_to_modules = {
+            'stem': [self.conv2d.conv1, self.conv2d.bn1],
+            'layer1': [self.conv2d.layer1],
+            'layer2': [self.conv2d.layer2],
+            'layer3': [self.conv2d.layer3],
+            'layer4': [self.conv2d.layer4],
+        }
+
+        frozen = []
+        for stage in stages:
+            if stage not in stage_to_modules:
+                print(f"[GFSLT-ResNet] Unknown freeze stage skipped: {stage}")
+                continue
+            for module in stage_to_modules[stage]:
+                for param in module.parameters():
+                    param.requires_grad = False
+            frozen.append(stage)
+
+        if frozen:
+            print(f"[GFSLT-ResNet] Frozen conv2d stages: {frozen}")
 
     def backward_hook(self, module, grad_input, grad_output):
         for g in grad_input:
