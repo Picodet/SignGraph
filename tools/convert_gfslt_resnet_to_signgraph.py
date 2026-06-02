@@ -22,7 +22,9 @@ import torch
 
 
 GFSLT_RESNET_PREFIXES = (
+    'backbone.conv_2d.resnet.',
     'model_images.model.conv_2d.resnet.',
+    'module.backbone.conv_2d.resnet.',
     'module.model_images.model.conv_2d.resnet.',
 )
 
