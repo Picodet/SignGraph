@@ -6,8 +6,9 @@ ctcdecode_prebuilt/
 ctcdecode_repo/
 ctcdecode_prebuilt.zip
 prev_run_backup/
-work_dirt/
+work_dirt*/
 data/
 *.bak
 fix_main_indent.py
 swanlog/
+.idea/
