@@ -1,0 +1,64 @@
+feeder: dataset.dataloader_video.BaseFeeder
+phase: train
+dataset: phoenix2014-T
+#CSL-Daily
+# dataset: phoenix14-si5
+
+work_dir: ./work_dirt_gfslt_v2/
+batch_size: 4
+random_seed: 0
+test_batch_size: 4
+num_worker: 20
+device: 0
+log_interval: 10000
+eval_interval: 1
+save_interval: 10
+
+evaluate_tool: python
+loss_weights:
+  SeqCTC: 1.0
+  ConvCTC: 1.0
+  Dist: 25.0
+load_weights:  False
+load_checkpoints:  False
+
+# GFSLT-VLP Stage1 ResNet initialization (control-variable run).
+# Generate this file with:
+#   python tools/convert_gfslt_resnet_to_signgraph.py \
+#       --src /path/to/gfslt_stage1.pth \
+#       --dst pretrained/gfslt_resnet18_full.pth
+# BN running stats are kept by default (no --skip-bn-stats).
+gfslt_resnet_path: pretrained/gfslt_resnet18_full.pth
+gfslt_resnet_strict: False
+gfslt_freeze_stages: []
+
+optimizer_args:
+  optimizer: Adam
+  learning_rate:
+    base_lr: 0.0001
+  step: [20, 30, 35]
+  learning_ratio: 1
+  scheduler: ScheaL #consine
+  weight_decay: 0.0001
+  start_epoch: 0
+  num_epoch: 101 #50
+  nesterov: False
+
+feeder_args:
+  mode: 'train'
+  datatype: 'video'
+  num_gloss: -1
+  drop_ratio: 1.0
+  frame_interval: 1
+  image_scale: 1.0  # 0-1 represents ratio, >1 represents absolute value
+  input_size: 224
+
+model: slr_network.SLRModel
+decode_mode: beam
+model_args:
+  num_classes: 1296
+  c2d_type: resnet18
+  conv_type: 2
+  use_bn: 1
+  share_classifier: True
+  weight_norm: True

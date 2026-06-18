@@ -52,18 +52,16 @@ def parse_args():
     parser.add_argument(
         '--skip-bn-stats',
         action='store_true',
-        default=True,
+        default=False,
         help='Skip BN running statistics (running_mean, running_var, num_batches_tracked). '
-             'Default: True. BN running stats are task-specific snapshots of data distribution '
-             'and should NOT be transferred across different tasks. Only conv weights and BN '
-             'learnable parameters (weight/bias) are preserved.'
+             'Default: False — full BN transfer including running stats, to keep this run a '
+             'strict drop-in replacement of the ImageNet pretrain (control-variable comparison).'
     )
     parser.add_argument(
         '--keep-bn-stats',
         action='store_true',
         default=False,
-        help='Keep BN running statistics (overrides --skip-bn-stats). Use only if you are '
-             'sure the source and target tasks share the same data distribution.'
+        help='Deprecated. BN running stats are kept by default now. Kept for CLI compatibility.'
     )
     return parser.parse_args()
 
